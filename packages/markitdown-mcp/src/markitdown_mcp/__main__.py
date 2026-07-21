@@ -13,6 +13,39 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from markitdown import MarkItDown
 import uvicorn
 
+# Initialize MarkItDown with CustomAudioConverter
+_md_instance = None
+
+def get_markitdown_instance():
+    """Get or create MarkItDown instance with CustomAudioConverter registered"""
+    global _md_instance
+    if _md_instance is None:
+        _md_instance = MarkItDown(enable_plugins=check_plugins_enabled())
+
+        # Register CustomAudioConverter for long audio/video files
+        try:
+            from .custom_audio_converter import CustomAudioConverter
+
+            # Set FFmpeg path if available (Windows)
+            if os.name == 'nt':
+                ffmpeg_bin = os.path.join(
+                    os.environ.get('LOCALAPPDATA', ''),
+                    r"Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.2-full_build\bin"
+                )
+                if os.path.exists(ffmpeg_bin):
+                    os.environ["PATH"] = ffmpeg_bin + os.pathsep + os.environ.get("PATH", "")
+
+            # Register converter with high priority
+            converter = CustomAudioConverter(language="en-US", chunk_length_ms=30000)
+            _md_instance.register_converter(converter, priority=-10)
+            print("[MarkItDown MCP] CustomAudioConverter registered successfully")
+        except ImportError as e:
+            print(f"[MarkItDown MCP] Warning: Could not import CustomAudioConverter: {e}")
+        except Exception as e:
+            print(f"[MarkItDown MCP] Warning: Could not register CustomAudioConverter: {e}")
+
+    return _md_instance
+
 # Initialize FastMCP server for MarkItDown (SSE)
 mcp = FastMCP("markitdown")
 
@@ -20,7 +53,8 @@ mcp = FastMCP("markitdown")
 @mcp.tool()
 async def convert_to_markdown(uri: str) -> str:
     """Convert a resource described by an http:, https:, file: or data: URI to markdown"""
-    return MarkItDown(enable_plugins=check_plugins_enabled()).convert_uri(uri).markdown
+    md = get_markitdown_instance()
+    return md.convert_uri(uri).markdown
 
 
 def check_plugins_enabled() -> bool:
