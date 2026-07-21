@@ -29,9 +29,9 @@ dependencies = [
 ]
 
 [project.urls]
-Documentation = "https://github.com/microsoft/markitdown#readme"
-Issues = "https://github.com/microsoft/markitdown/issues"
-Source = "https://github.com/microsoft/markitdown"
+Documentation = "https://github.com/liufei379/markitdown#readme"
+Issues = "https://github.com/liufei379/markitdown/issues"
+Source = "https://github.com/liufei379/markitdown"
 
 [tool.hatch.version]
 path = "src/markitdown_mcp/__about__.py"

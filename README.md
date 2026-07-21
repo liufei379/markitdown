@@ -28,20 +28,28 @@
 
 #### 🚀 使用方法
 
-**在 Claude Code CLI 中使用**：
+**方法 1：直接从本仓库安装（推荐）**
 
-1. 安装依赖：
 ```bash
-pip install markitdown-mcp
+# 安装 markitdown-mcp（增强版）
+pip install git+https://github.com/liufei379/markitdown.git#subdirectory=packages/markitdown-mcp
+
+# 添加到 Claude Code CLI
 claude mcp add markitdown -- python -m markitdown_mcp
+
+# 验证安装
+claude mcp list
+# 应该看到：markitdown: python -m markitdown_mcp - ✔ Connected
 ```
 
-2. 在对话中使用：
+**方法 2：在 Claude Code CLI 中使用**：
+
+安装后，在对话中使用：
 ```
 使用 markitdown 这个 mcp 工具转换 D:/video.mp4
 ```
 
-**在 Python 代码中使用**：
+**方法 3：在 Python 代码中使用**：
 
 ```python
 from markitdown import MarkItDown
