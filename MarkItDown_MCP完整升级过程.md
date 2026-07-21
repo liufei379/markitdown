@@ -103,7 +103,7 @@ class CustomAudioConverter(DocumentConverter):
 
 **文件位置**：
 ```
-C:\Users\liufe\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\markitdown_mcp\custom_audio_converter.py
+<Python安装目录>\Lib\site-packages\markitdown_mcp\custom_audio_converter.py
 ```
 
 **文件大小**：7,609 字节
@@ -223,7 +223,7 @@ claude mcp add markitdown --scope user -- python -m markitdown_mcp
 **结果**：
 ```
 Added stdio MCP server markitdown with command: python -m markitdown_mcp to user config
-File modified: C:\Users\liufe\.claude.json
+File modified: ~/.claude.json
 ```
 
 **验证**：
@@ -234,7 +234,7 @@ claude mcp list
 
 #### 5.4 配置位置
 
-**文件**：`C:\Users\liufe\.claude.json`
+**文件**：`~/.claude.json`
 
 **全局配置**（第 970 行左右）：
 ```json
@@ -493,11 +493,11 @@ Couldn't find ffmpeg or avconv
    - 状态：✅ 已创建
 
 2. **使用指南**
-   - 位置：`C:\Users\liufe\Desktop\docs\MarkItDown_CLI使用指南.md`
+   - 位置：`~/Desktop/docs/MarkItDown_CLI使用指南.md`
    - 状态：✅ 已创建
 
 3. **升级过程**（本文档）
-   - 位置：`C:\Users\liufe\Desktop\docs\MarkItDown_MCP完整升级过程.md`
+   - 位置：`~/Desktop/docs/MarkItDown_MCP完整升级过程.md`
    - 状态：✅ 已创建
 
 ### 修改文件
@@ -508,7 +508,7 @@ Couldn't find ffmpeg or avconv
    - 变更：添加 `get_markitdown_instance()` 和自动注册逻辑
 
 2. **CLI 配置**
-   - 位置：`C:\Users\liufe\.claude.json`
+   - 位置：`~/.claude.json`
    - 状态：✅ 已修改
    - 变更：添加 markitdown MCP 服务器配置
 
