@@ -142,18 +142,28 @@ class CustomAudioConverter(DocumentConverter):
                     'text': f'[Error: {e}]'
                 })
 
+        # 生成完整转录文本（用于摘要）
+        full_text = " ".join([t['text'] for t in transcriptions if not t['text'].startswith('[')])
+
         # 生成 Markdown
-        md_content = f"### Audio Information\n\n"
+        md_content = f"### 音频摘要\n\n"
+
+        # 生成简短摘要（基于转录内容）
+        if len(full_text) > 200:
+            # 取前 200 字作为简要摘要
+            summary = full_text[:200] + "..."
+            md_content += f"{summary}\n\n"
+            md_content += f"**注**: 这是音频内容的前 200 字预览。完整转录请查看下方分段内容。\n\n"
+        else:
+            md_content += f"{full_text}\n\n"
+
+        # 音频信息
+        md_content += f"### Audio Information\n\n"
         md_content += f"- **Duration**: {int(duration_seconds//60)} min {int(duration_seconds%60)} sec\n"
         md_content += f"- **Channels**: {audio_segment.channels}\n"
         md_content += f"- **Sample Rate**: {audio_segment.frame_rate} Hz\n"
         md_content += f"- **Recognition Language**: {self.language}\n"
         md_content += f"- **Processing Date**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-
-        # 完整转录
-        md_content += "### Full Transcript\n\n"
-        full_text = " ".join([t['text'] for t in transcriptions if not t['text'].startswith('[')])
-        md_content += full_text + "\n\n"
 
         # 分段转录
         md_content += "### Segmented Transcript (with Timestamps)\n\n"

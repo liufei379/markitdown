@@ -36,7 +36,8 @@ def get_markitdown_instance():
                     os.environ["PATH"] = ffmpeg_bin + os.pathsep + os.environ.get("PATH", "")
 
             # Register converter with high priority
-            converter = CustomAudioConverter(language="zh-CN", chunk_length_ms=30000)
+            # Use cmn-Hans-CN for Mandarin Chinese with Simplified characters
+            converter = CustomAudioConverter(language="cmn-Hans-CN", chunk_length_ms=30000)
             _md_instance.register_converter(converter, priority=-10)
             print("[MarkItDown MCP] CustomAudioConverter registered successfully")
         except ImportError as e:
