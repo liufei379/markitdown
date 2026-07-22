@@ -42,6 +42,23 @@ claude mcp list
 # 应该看到：markitdown: python -m markitdown_mcp - ✔ Connected
 ```
 
+**可选依赖安装**：
+
+如需解析文档中的图片并提取文字（OCR），请安装 Tesseract OCR：
+
+```bash
+# Windows
+winget install --id UB-Mannheim.TesseractOCR
+
+# Mac
+brew install tesseract
+
+# Linux
+sudo apt install tesseract-ocr
+```
+
+> **注意**：安装 Tesseract OCR 后需要重启 Claude Code CLI 才能生效。未安装时，图片会以压缩后的 base64 格式返回。
+
 **方法 2：在 Claude Code CLI 中使用**：
 
 安装后，在对话中使用：
