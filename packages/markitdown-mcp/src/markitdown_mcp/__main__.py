@@ -54,7 +54,40 @@ mcp = FastMCP("markitdown")
 async def convert_to_markdown(uri: str) -> str:
     """Convert a resource described by an http:, https:, file: or data: URI to markdown"""
     md = get_markitdown_instance()
-    return md.convert_uri(uri).markdown
+    result = md.convert_uri(uri)
+
+    # Check if image extraction is enabled (default: true)
+    extract_images_enabled = os.getenv("MARKITDOWN_EXTRACT_IMAGES", "true").strip().lower() in ("true", "1", "yes")
+
+    if extract_images_enabled and uri.startswith("file://"):
+        # Convert URI to file path
+        from urllib.parse import unquote
+        file_path = unquote(uri.replace("file://", ""))
+
+        # Handle Windows paths (remove leading / if path starts with drive letter)
+        if file_path.startswith("/") and len(file_path) > 2 and file_path[2] == ":":
+            file_path = file_path[1:]
+
+        try:
+            from .image_extractor import extract_images, format_images_as_markdown
+
+            # Extract images from document
+            images = extract_images(file_path)
+
+            if images:
+                max_images = int(os.getenv("MARKITDOWN_MAX_IMAGES", "999"))
+                print(f"[MarkItDown MCP] Extracted {len(images)} images from document")
+
+                # Format images as Markdown
+                images_markdown = format_images_as_markdown(images, max_images=max_images)
+
+                # Append to output
+                return result.markdown + "\n\n---\n## Document Images\n" + images_markdown
+
+        except Exception as e:
+            print(f"[MarkItDown MCP] Warning: Image extraction failed: {e}")
+
+    return result.markdown
 
 
 def check_plugins_enabled() -> bool:
