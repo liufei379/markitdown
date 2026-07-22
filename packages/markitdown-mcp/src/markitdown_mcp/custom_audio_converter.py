@@ -1,50 +1,66 @@
 """
 Custom Audio Converter for MarkItDown
-支持长音频处理的增强版 AudioConverter
+支持长音频处理的增强版 AudioConverter，使用 faster-whisper 引擎
 
 使用方法：
     from markitdown import MarkItDown
     from markitdown_mcp.custom_audio_converter import CustomAudioConverter
 
     md = MarkItDown()
-    converter = CustomAudioConverter(language="en-US", chunk_length_ms=30000)
+    converter = CustomAudioConverter(model_size="small")
     md.register_converter(converter, priority=-10)
 
     result = md.convert("long_video.mp4")
 """
 
-import io
 import os
-import math
+import tempfile
 from typing import BinaryIO, Any
 from datetime import datetime
 from pydub import AudioSegment
-import speech_recognition as sr
+from faster_whisper import WhisperModel
 from markitdown._base_converter import DocumentConverter, DocumentConverterResult
 from markitdown._stream_info import StreamInfo
 
 
 class CustomAudioConverter(DocumentConverter):
     """
-    增强版 AudioConverter，支持长音频处理
+    增强版 AudioConverter，使用 faster-whisper 引擎
 
     特性：
-    - 支持指定识别语言
-    - 自动分段处理长音频
-    - 避免 Google API 超时限制
+    - 使用 faster-whisper (OpenAI Whisper) 引擎
+    - 支持 99 种语言，自动检测
+    - 优秀的中英文混合支持
+    - 本地离线处理，保护隐私
     - 生成带时间戳的分段转录
     """
 
-    def __init__(self, language="en-US", chunk_length_ms=30000):
+    def __init__(self, model_size="small", device="cpu", compute_type="int8"):
         """
         初始化转换器
 
         Args:
-            language: 语音识别语言（如 'en-US', 'zh-CN'）
-            chunk_length_ms: 分段长度（毫秒），默认 30 秒
+            model_size: 模型大小 ('tiny', 'base', 'small', 'medium', 'large-v3')
+                       推荐 'small' 用于集成显卡环境
+            device: 计算设备 ('cpu', 'cuda', 'auto')
+            compute_type: 计算精度 ('int8', 'int16', 'float16', 'float32')
+                         'int8' 可减少内存占用和提升速度
         """
-        self.language = language
-        self.chunk_length_ms = chunk_length_ms
+        self.model_size = model_size
+        self.device = device
+        self.compute_type = compute_type
+        self.model = None
+
+    def _load_model(self):
+        """延迟加载 Whisper 模型（首次使用时加载）"""
+        if self.model is None:
+            print(f"[CustomAudioConverter] Loading {self.model_size} model...")
+            self.model = WhisperModel(
+                self.model_size,
+                device=self.device,
+                compute_type=self.compute_type
+            )
+            print(f"[CustomAudioConverter] Model loaded successfully")
 
     def accepts(self, file_stream: BinaryIO, stream_info: StreamInfo, **kwargs: Any) -> bool:
         """检查是否支持此文件格式"""
@@ -70,6 +86,9 @@ class CustomAudioConverter(DocumentConverter):
         """
         转换音频/视频文件为 Markdown
         """
+        # 加载模型
+        self._load_model()
+
         # 确定音频格式
         if stream_info.extension == ".wav" or stream_info.mimetype == "audio/x-wav":
             audio_format = "wav"
@@ -87,63 +106,51 @@ class CustomAudioConverter(DocumentConverter):
 
         print(f"[CustomAudioConverter] Audio duration: {duration_seconds:.2f} seconds ({int(duration_seconds//60)} min {int(duration_seconds%60)} sec)")
 
-        # 分段处理
-        num_chunks = math.ceil(len(audio_segment) / self.chunk_length_ms)
-        print(f"[CustomAudioConverter] Processing in {num_chunks} chunks of {self.chunk_length_ms/1000:.0f} seconds each...")
+        # 转换为 WAV 格式（Whisper 最佳输入格式）
+        # 使用 16kHz 单声道，这是 Whisper 的标准格式
+        audio_segment = audio_segment.set_frame_rate(16000).set_channels(1)
 
-        recognizer = sr.Recognizer()
-        transcriptions = []
+        # 保存为临时 WAV 文件
+        temp_wav = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                temp_wav = f.name
+                audio_segment.export(temp_wav, format="wav")
 
-        for i in range(num_chunks):
-            start_ms = i * self.chunk_length_ms
-            end_ms = min((i + 1) * self.chunk_length_ms, len(audio_segment))
-            chunk = audio_segment[start_ms:end_ms]
+            print(f"[CustomAudioConverter] Starting transcription with {self.model_size} model...")
 
-            # 转换为 WAV
-            wav_io = io.BytesIO()
-            chunk.export(wav_io, format="wav")
-            wav_io.seek(0)
+            # 使用 Whisper 转录
+            segments, info = self.model.transcribe(
+                temp_wav,
+                language=None,  # 自动检测语言
+                task="transcribe",  # 保持原语言（不翻译成英文）
+                beam_size=5,  # 提高准确率
+                vad_filter=True,  # 使用 VAD 跳过静音部分
+                word_timestamps=True,  # 获取词级时间戳
+                initial_prompt="以下是普通话和英语的混合音频。"  # 提示中英文混合
+            )
 
-            # 识别
-            print(f"  Chunk {i+1}/{num_chunks} ({start_ms/1000:.0f}s-{end_ms/1000:.0f}s)...", end=" ")
+            print(f"[CustomAudioConverter] Detected language: {info.language} (confidence: {info.language_probability:.2%})")
 
-            try:
-                with sr.AudioFile(wav_io) as source:
-                    audio_data = recognizer.record(source)
-
-                # 使用指定语言识别
-                text = recognizer.recognize_google(audio_data, language=self.language)
+            # 收集所有转录段落
+            transcriptions = []
+            for segment in segments:
                 transcriptions.append({
-                    'start': start_ms / 1000,
-                    'end': end_ms / 1000,
-                    'text': text
+                    'start': segment.start,
+                    'end': segment.end,
+                    'text': segment.text.strip()
                 })
-                print(f"OK ({len(text)} chars)")
+                print(f"  Segment [{segment.start:.1f}s - {segment.end:.1f}s]: {len(segment.text)} chars")
 
-            except sr.UnknownValueError:
-                print("No speech")
-                transcriptions.append({
-                    'start': start_ms / 1000,
-                    'end': end_ms / 1000,
-                    'text': '[No speech detected]'
-                })
-            except sr.RequestError as e:
-                print(f"API error: {e}")
-                transcriptions.append({
-                    'start': start_ms / 1000,
-                    'end': end_ms / 1000,
-                    'text': f'[API error: {e}]'
-                })
-            except Exception as e:
-                print(f"Error: {e}")
-                transcriptions.append({
-                    'start': start_ms / 1000,
-                    'end': end_ms / 1000,
-                    'text': f'[Error: {e}]'
-                })
+            print(f"[CustomAudioConverter] Transcription complete. Total segments: {len(transcriptions)}")
+
+        finally:
+            # 清理临时文件
+            if temp_wav and os.path.exists(temp_wav):
+                os.remove(temp_wav)
 
         # 生成完整转录文本（用于摘要）
-        full_text = " ".join([t['text'] for t in transcriptions if not t['text'].startswith('[')])
+        full_text = " ".join([t['text'] for t in transcriptions if t['text'] and not t['text'].startswith('[')])
 
         # 生成 Markdown
         md_content = f"### 音频摘要\n\n"
@@ -162,7 +169,8 @@ class CustomAudioConverter(DocumentConverter):
         md_content += f"- **Duration**: {int(duration_seconds//60)} min {int(duration_seconds%60)} sec\n"
         md_content += f"- **Channels**: {audio_segment.channels}\n"
         md_content += f"- **Sample Rate**: {audio_segment.frame_rate} Hz\n"
-        md_content += f"- **Recognition Language**: {self.language}\n"
+        md_content += f"- **Recognition Engine**: faster-whisper ({self.model_size})\n"
+        md_content += f"- **Detected Language**: {info.language} (confidence: {info.language_probability:.2%})\n"
         md_content += f"- **Processing Date**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
 
         # 分段转录
@@ -195,13 +203,13 @@ if __name__ == "__main__":
     # 创建 MarkItDown 实例
     md = MarkItDown()
 
-    # 注册自定义转换器（英文识别，30秒分段）
-    custom_converter = CustomAudioConverter(language="en-US", chunk_length_ms=30000)
+    # 注册自定义转换器（使用 small 模型）
+    custom_converter = CustomAudioConverter(model_size="small", device="cpu", compute_type="int8")
     md.register_converter(custom_converter, priority=-10)  # 高优先级
 
     # 转换视频
     video_file = "example.mp4"
-    print(f"Converting {video_file} using MarkItDown + CustomAudioConverter...\n")
+    print(f"Converting {video_file} using MarkItDown + faster-whisper...\n")
 
     result = md.convert(video_file)
 
@@ -210,7 +218,7 @@ if __name__ == "__main__":
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write("# Video Transcription\n\n")
         f.write(f"**Source**: {video_file}\n")
-        f.write("**Method**: MarkItDown + CustomAudioConverter + FFmpeg\n\n")
+        f.write("**Method**: MarkItDown + faster-whisper (small) + FFmpeg\n\n")
         f.write(result.text_content)
 
     print(f"\nTranscription complete! Output: {output_file}")

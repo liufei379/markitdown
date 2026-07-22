@@ -35,11 +35,12 @@ def get_markitdown_instance():
                 if os.path.exists(ffmpeg_bin):
                     os.environ["PATH"] = ffmpeg_bin + os.pathsep + os.environ.get("PATH", "")
 
-            # Register converter with high priority
-            # Use cmn-Hans-CN for Mandarin Chinese with Simplified characters
-            converter = CustomAudioConverter(language="cmn-Hans-CN", chunk_length_ms=30000)
+            # Register converter with faster-whisper (small model)
+            # Using small model for best balance between accuracy and speed
+            # Automatic language detection for multilingual support
+            converter = CustomAudioConverter(model_size="small", device="cpu", compute_type="int8")
             _md_instance.register_converter(converter, priority=-10)
-            print("[MarkItDown MCP] CustomAudioConverter registered successfully")
+            print("[MarkItDown MCP] CustomAudioConverter registered successfully (faster-whisper small model)")
         except ImportError as e:
             print(f"[MarkItDown MCP] Warning: Could not import CustomAudioConverter: {e}")
         except Exception as e:
