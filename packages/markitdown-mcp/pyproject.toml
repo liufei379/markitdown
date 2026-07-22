@@ -27,7 +27,12 @@ dependencies = [
   "mcp~=1.8.0",
   "markitdown>=0.1.1,<0.2.0",
   "faster-whisper>=1.0.0",
-  "pydub>=0.25.1",
+  "torch>=2.0.0",
+]
+
+[project.optional-dependencies]
+audio = [
+  "pydub>=0.25.1",  # Fallback for audio processing if FFmpeg not available
 ]
 
 [project.urls]
