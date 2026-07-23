@@ -1,22 +1,18 @@
 """
 Custom Audio Converter for MarkItDown
-支持长音频处理的增强版 AudioConverter
+使用双引擎 Web Speech API（中文 + 英文）
 
-使用方法：
-    from markitdown import MarkItDown
-    from markitdown_mcp.custom_audio_converter import CustomAudioConverter
-
-    md = MarkItDown()
-    converter = CustomAudioConverter(language="en-US", chunk_length_ms=30000)
-    md.register_converter(converter, priority=-10)
-
-    result = md.convert("long_video.mp4")
+特性：
+- 中英文双引擎并行识别
+- 返回双份转录结果
+- 由 Claude Code 智能合并
+- 适合中英文混合场景
 """
 
 import io
 import os
 import math
-from typing import BinaryIO, Any
+from typing import BinaryIO, Any, List, Dict
 from datetime import datetime
 from pydub import AudioSegment
 import speech_recognition as sr
@@ -26,24 +22,21 @@ from markitdown._stream_info import StreamInfo
 
 class CustomAudioConverter(DocumentConverter):
     """
-    增强版 AudioConverter，支持长音频处理
+    双引擎音频转换器（中文 + 英文）
 
     特性：
-    - 支持指定识别语言
-    - 自动分段处理长音频
-    - 避免 Google API 超时限制
-    - 生成带时间戳的分段转录
+    - 同时使用中文和英文引擎识别
+    - 返回双份转录结果
+    - 由 Claude Code 智能合并
     """
 
-    def __init__(self, language="en-US", chunk_length_ms=30000):
+    def __init__(self, chunk_length_ms=30000):
         """
         初始化转换器
 
         Args:
-            language: 语音识别语言（如 'en-US', 'zh-CN'）
             chunk_length_ms: 分段长度（毫秒），默认 30 秒
         """
-        self.language = language
         self.chunk_length_ms = chunk_length_ms
 
     def accepts(self, file_stream: BinaryIO, stream_info: StreamInfo, **kwargs: Any) -> bool:
@@ -68,7 +61,7 @@ class CustomAudioConverter(DocumentConverter):
 
     def convert(self, file_stream: BinaryIO, stream_info: StreamInfo, **kwargs: Any) -> DocumentConverterResult:
         """
-        转换音频/视频文件为 Markdown
+        使用双引擎转换音频/视频文件为 Markdown
         """
         # 确定音频格式
         if stream_info.extension == ".wav" or stream_info.mimetype == "audio/x-wav":
@@ -78,21 +71,22 @@ class CustomAudioConverter(DocumentConverter):
         elif stream_info.extension in [".mp4", ".m4a"] or stream_info.mimetype == "video/mp4":
             audio_format = "mp4"
         else:
-            audio_format = "mp4"  # 默认
+            audio_format = "mp4"
 
         # 提取音频
-        print(f"[CustomAudioConverter] Extracting audio from {audio_format} file...")
+        print(f"[DualEngine] Extracting audio from {audio_format} file...")
         audio_segment = AudioSegment.from_file(file_stream, format=audio_format)
         duration_seconds = len(audio_segment) / 1000
 
-        print(f"[CustomAudioConverter] Audio duration: {duration_seconds:.2f} seconds ({int(duration_seconds//60)} min {int(duration_seconds%60)} sec)")
+        print(f"[DualEngine] Audio duration: {duration_seconds:.2f} seconds ({int(duration_seconds//60)} min {int(duration_seconds%60)} sec)")
 
         # 分段处理
         num_chunks = math.ceil(len(audio_segment) / self.chunk_length_ms)
-        print(f"[CustomAudioConverter] Processing in {num_chunks} chunks of {self.chunk_length_ms/1000:.0f} seconds each...")
+        print(f"[DualEngine] Processing in {num_chunks} chunks with dual engines (Chinese + English)...")
 
         recognizer = sr.Recognizer()
-        transcriptions = []
+        chinese_results = []
+        english_results = []
 
         for i in range(num_chunks):
             start_ms = i * self.chunk_length_ms
@@ -102,77 +96,94 @@ class CustomAudioConverter(DocumentConverter):
             # 转换为 WAV
             wav_io = io.BytesIO()
             chunk.export(wav_io, format="wav")
+
+            print(f"  Chunk {i+1}/{num_chunks} ({start_ms/1000:.0f}s-{end_ms/1000:.0f}s)...")
+
+            # 中文引擎
             wav_io.seek(0)
+            zh_text = self._transcribe_chunk(recognizer, wav_io, "zh-CN", "Chinese")
+            chinese_results.append({
+                'start': start_ms / 1000,
+                'end': end_ms / 1000,
+                'text': zh_text
+            })
 
-            # 识别
-            print(f"  Chunk {i+1}/{num_chunks} ({start_ms/1000:.0f}s-{end_ms/1000:.0f}s)...", end=" ")
+            # 英文引擎
+            wav_io.seek(0)
+            en_text = self._transcribe_chunk(recognizer, wav_io, "en-US", "English")
+            english_results.append({
+                'start': start_ms / 1000,
+                'end': end_ms / 1000,
+                'text': en_text
+            })
 
-            try:
-                with sr.AudioFile(wav_io) as source:
-                    audio_data = recognizer.record(source)
+        # 生成双引擎结果 Markdown
+        md_content = self._format_dual_results(chinese_results, english_results, duration_seconds, audio_segment)
 
-                # 使用指定语言识别
-                text = recognizer.recognize_google(audio_data, language=self.language)
-                transcriptions.append({
-                    'start': start_ms / 1000,
-                    'end': end_ms / 1000,
-                    'text': text
-                })
-                print(f"OK ({len(text)} chars)")
+        return DocumentConverterResult(markdown=md_content.strip())
 
-            except sr.UnknownValueError:
-                print("No speech")
-                transcriptions.append({
-                    'start': start_ms / 1000,
-                    'end': end_ms / 1000,
-                    'text': '[No speech detected]'
-                })
-            except sr.RequestError as e:
-                print(f"API error: {e}")
-                transcriptions.append({
-                    'start': start_ms / 1000,
-                    'end': end_ms / 1000,
-                    'text': f'[API error: {e}]'
-                })
-            except Exception as e:
-                print(f"Error: {e}")
-                transcriptions.append({
-                    'start': start_ms / 1000,
-                    'end': end_ms / 1000,
-                    'text': f'[Error: {e}]'
-                })
+    def _transcribe_chunk(self, recognizer: sr.Recognizer, wav_io: io.BytesIO, language: str, engine_name: str) -> str:
+        """转录单个音频块"""
+        try:
+            with sr.AudioFile(wav_io) as source:
+                audio_data = recognizer.record(source)
 
-        # 生成完整转录文本（用于摘要）
-        full_text = " ".join([t['text'] for t in transcriptions if not t['text'].startswith('[')])
+            text = recognizer.recognize_google(audio_data, language=language)
+            print(f"    {engine_name}: OK ({len(text)} chars)")
+            return text
 
-        # 生成 Markdown
-        md_content = f"### 音频摘要\n\n"
+        except sr.UnknownValueError:
+            print(f"    {engine_name}: No speech")
+            return '[No speech detected]'
+        except sr.RequestError as e:
+            print(f"    {engine_name}: API error - {e}")
+            return f'[API error: {e}]'
+        except Exception as e:
+            print(f"    {engine_name}: Error - {e}")
+            return f'[Error: {e}]'
 
-        # 生成简短摘要（基于转录内容）
-        if len(full_text) > 200:
-            # 取前 200 字作为简要摘要
-            summary = full_text[:200] + "..."
-            md_content += f"{summary}\n\n"
-            md_content += f"**注**: 这是音频内容的前 200 字预览。完整转录请查看下方分段内容。\n\n"
-        else:
-            md_content += f"{full_text}\n\n"
+    def _format_dual_results(self, chinese_results: List[Dict], english_results: List[Dict],
+                            duration_seconds: float, audio_segment: AudioSegment) -> str:
+        """格式化双引擎结果为 Markdown"""
 
-        # 音频信息
-        md_content += f"### Audio Information\n\n"
-        md_content += f"- **Duration**: {int(duration_seconds//60)} min {int(duration_seconds%60)} sec\n"
-        md_content += f"- **Channels**: {audio_segment.channels}\n"
-        md_content += f"- **Sample Rate**: {audio_segment.frame_rate} Hz\n"
-        md_content += f"- **Recognition Language**: {self.language}\n"
-        md_content += f"- **Processing Date**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        md_content = f"""# 双引擎转录结果（中文 + 英文）
 
-        # 分段转录
-        md_content += "### Segmented Transcript (with Timestamps)\n\n"
-        for segment in transcriptions:
-            start = segment['start']
-            end = segment['end']
-            text = segment['text']
-            md_content += f"**[{int(start//60):02d}:{int(start%60):02d} - {int(end//60):02d}:{int(end%60):02d}]**\n\n"
-            md_content += f"{text}\n\n"
+## 音频信息
+- **时长**: {int(duration_seconds//60)} 分 {int(duration_seconds%60)} 秒
+- **声道**: {audio_segment.channels}
+- **采样率**: {audio_segment.frame_rate} Hz
+- **引擎**: Web Speech API (Google)
+- **处理时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+---
+
+## 使用说明
+
+下面是同一段音频的两份转录结果：
+1. **中文引擎结果**：适合识别中文内容
+2. **英文引擎结果**：适合识别英文内容
+
+**请 Claude 智能合并这两份结果**，规则：
+- 中文部分优先使用中文引擎结果
+- 英文单词优先使用英文引擎结果
+- 混合句子综合判断，保持语义流畅
+- 输出最终的准确转录文本
+
+---
+
+"""
+
+        # 逐段输出双引擎结果
+        for i, (zh_seg, en_seg) in enumerate(zip(chinese_results, english_results), 1):
+            start = zh_seg['start']
+            end = zh_seg['end']
+
+            md_content += f"### 分段 {i} [{int(start//60):02d}:{int(start%60):02d} - {int(end//60):02d}:{int(end%60):02d}]\n\n"
+            md_content += f"**中文引擎**：{zh_seg['text']}\n\n"
+            md_content += f"**英文引擎**：{en_seg['text']}\n\n"
+            md_content += f"---\n\n"
+
+        return md_content
 
         return DocumentConverterResult(markdown=md_content.strip())
 

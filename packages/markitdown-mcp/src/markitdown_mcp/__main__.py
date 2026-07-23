@@ -35,11 +35,11 @@ def get_markitdown_instance():
                 if os.path.exists(ffmpeg_bin):
                     os.environ["PATH"] = ffmpeg_bin + os.pathsep + os.environ.get("PATH", "")
 
-            # Register converter with high priority
-            # Use cmn-Hans-CN for Mandarin Chinese with Simplified characters
-            converter = CustomAudioConverter(language="cmn-Hans-CN", chunk_length_ms=30000)
+            # Register dual-engine audio converter (Chinese + English)
+            # Returns both transcription results for Claude Code to merge
+            converter = CustomAudioConverter(chunk_length_ms=30000)
             _md_instance.register_converter(converter, priority=-10)
-            print("[MarkItDown MCP] CustomAudioConverter registered successfully")
+            print("[MarkItDown MCP] Dual-Engine AudioConverter registered (Chinese + English)")
         except ImportError as e:
             print(f"[MarkItDown MCP] Warning: Could not import CustomAudioConverter: {e}")
         except Exception as e:
