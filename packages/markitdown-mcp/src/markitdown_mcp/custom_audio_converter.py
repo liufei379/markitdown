@@ -95,22 +95,26 @@ class CustomAudioConverter(DocumentConverter):
             self.beam_size = 1
             self.best_of = 1
             self.batch_size = 32 if self.device == "cuda" else 16
-            self.vad_threshold = 0.6
-            self.vad_min_silence_ms = 1000
+            # 激进 VAD 参数（优化后）
+            self.vad_threshold = 0.65  # 提高阈值，跳过更多模糊区域
+            self.vad_min_speech_duration_ms = 400  # 忽略短促声音
+            self.vad_min_silence_ms = 900  # 更快切分
             self.word_timestamps = False
             self.condition_on_previous = False
-            print("[CustomAudioConverter] Performance mode: SPEED (2-3x faster, -1~3% accuracy)")
+            print("[CustomAudioConverter] Performance mode: SPEED (2-3x faster, optimized VAD)")
 
         elif self.performance_mode == "balanced":
             # 平衡模式：30-50% 提速
             self.beam_size = 3
             self.best_of = 3
             self.batch_size = 24 if self.device == "cuda" else 12
-            self.vad_threshold = 0.55
-            self.vad_min_silence_ms = 1500
+            # 平衡 VAD 参数（轻度优化）
+            self.vad_threshold = 0.58  # 略微提高
+            self.vad_min_speech_duration_ms = 300
+            self.vad_min_silence_ms = 1200  # 略微降低
             self.word_timestamps = True
             self.condition_on_previous = True
-            print("[CustomAudioConverter] Performance mode: BALANCED (30-50% faster, <1% accuracy loss)")
+            print("[CustomAudioConverter] Performance mode: BALANCED (30-50% faster, optimized VAD)")
 
         else:  # quality
             # 质量优先：保持准确率
@@ -118,6 +122,7 @@ class CustomAudioConverter(DocumentConverter):
             self.best_of = 5
             self.batch_size = 16 if self.device == "cuda" else 8
             self.vad_threshold = 0.5
+            self.vad_min_speech_duration_ms = 250
             self.vad_min_silence_ms = 2000
             self.word_timestamps = True
             self.condition_on_previous = True
@@ -170,12 +175,25 @@ class CustomAudioConverter(DocumentConverter):
     def _load_model(self):
         """延迟加载 Whisper 模型（首次使用时加载）"""
         if self.model is None:
+            # 动态检测 CPU 核心数并优化 num_workers
+            try:
+                import psutil
+                cpu_cores = psutil.cpu_count(logical=False)  # 物理核心
+                if cpu_cores:
+                    num_workers = max(cpu_cores - 1, 4)  # 至少4个，留1个核心给系统
+                else:
+                    num_workers = 4  # 默认
+                print(f"[CustomAudioConverter] Detected {cpu_cores} CPU cores, using {num_workers} workers")
+            except:
+                num_workers = 4  # 回退到默认值
+                print("[CustomAudioConverter] Using default 4 workers")
+
             print(f"[CustomAudioConverter] Loading {self.model_size} model on {self.device} with {self.compute_type}...")
             self.model = WhisperModel(
                 self.model_size,
                 device=self.device,
                 compute_type=self.compute_type,
-                num_workers=4  # 使用多线程加速
+                num_workers=num_workers
             )
             print(f"[CustomAudioConverter] Model loaded successfully")
 
@@ -259,7 +277,7 @@ class CustomAudioConverter(DocumentConverter):
                 vad_filter=True,  # 使用 VAD 跳过静音部分
                 vad_parameters=dict(
                     threshold=self.vad_threshold,
-                    min_speech_duration_ms=250,
+                    min_speech_duration_ms=self.vad_min_speech_duration_ms,
                     min_silence_duration_ms=self.vad_min_silence_ms
                 ),
                 word_timestamps=self.word_timestamps,

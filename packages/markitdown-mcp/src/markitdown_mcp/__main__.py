@@ -39,15 +39,15 @@ def get_markitdown_instance():
             # Using small model for best balance between accuracy and speed
             # Automatic device detection (CUDA if available, otherwise CPU)
             # Automatic compute type selection (int8_float16 for GPU, int8 for CPU)
-            # Performance mode: balanced (30-50% faster, <1% accuracy loss)
+            # Performance mode: speed (2-3x faster with CPU multi-core + aggressive VAD)
             converter = CustomAudioConverter(
                 model_size="small",
                 device="auto",
                 compute_type="auto",
-                performance_mode="balanced"
+                performance_mode="speed"
             )
             _md_instance.register_converter(converter, priority=-10)
-            print("[MarkItDown MCP] CustomAudioConverter registered successfully (faster-whisper optimized)")
+            print("[MarkItDown MCP] CustomAudioConverter registered successfully (speed mode + optimized)")
         except ImportError as e:
             print(f"[MarkItDown MCP] Warning: Could not import CustomAudioConverter: {e}")
         except Exception as e:
