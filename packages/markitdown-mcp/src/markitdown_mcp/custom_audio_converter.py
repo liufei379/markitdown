@@ -11,8 +11,10 @@ Custom Audio Converter for MarkItDown
 
 import io
 import os
+import sys
 import math
 import time
+import threading
 import concurrent.futures
 from typing import BinaryIO, Any, List, Dict
 from datetime import datetime
@@ -30,6 +32,7 @@ class CustomAudioConverter(DocumentConverter):
     - 同时使用中文和英文引擎识别
     - 返回双份转录结果
     - 由 Claude Code 智能合并
+    - 资源自动清理，避免内存泄漏
     """
 
     def __init__(self, chunk_length_ms=30000):
@@ -40,6 +43,20 @@ class CustomAudioConverter(DocumentConverter):
             chunk_length_ms: 分段长度（毫秒），默认 30 秒
         """
         self.chunk_length_ms = chunk_length_ms
+        # 重用线程池，避免重复创建销毁
+        self._executor = None
+
+    def _get_executor(self):
+        """获取或创建线程池（重用，避免重复创建）"""
+        if self._executor is None:
+            self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        return self._executor
+
+    def _cleanup_executor(self):
+        """清理线程池"""
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = None
 
     def accepts(self, file_stream: BinaryIO, stream_info: StreamInfo, **kwargs: Any) -> bool:
         """检查是否支持此文件格式"""
@@ -65,6 +82,14 @@ class CustomAudioConverter(DocumentConverter):
         """
         使用双引擎并行转换音频/视频文件为 Markdown
         """
+        try:
+            return self._convert_internal(file_stream, stream_info, **kwargs)
+        finally:
+            # 确保资源清理
+            self._cleanup_executor()
+
+    def _convert_internal(self, file_stream: BinaryIO, stream_info: StreamInfo, **kwargs: Any) -> DocumentConverterResult:
+        """内部转换逻辑"""
         # 确定音频格式
         if stream_info.extension == ".wav" or stream_info.mimetype == "audio/x-wav":
             audio_format = "wav"
@@ -76,37 +101,47 @@ class CustomAudioConverter(DocumentConverter):
             audio_format = "mp4"
 
         # 提取音频
-        print(f"[DualEngine] Extracting audio from {audio_format} file...")
+        print(f"[DualEngine] Extracting audio from {audio_format} file...", flush=True)
+        sys.stdout.flush()
+
         audio_segment = AudioSegment.from_file(file_stream, format=audio_format)
         duration_seconds = len(audio_segment) / 1000
 
-        print(f"[DualEngine] Audio duration: {duration_seconds:.2f} seconds ({int(duration_seconds//60)} min {int(duration_seconds%60)} sec)")
+        print(f"[DualEngine] Audio duration: {duration_seconds:.2f} seconds ({int(duration_seconds//60)} min {int(duration_seconds%60)} sec)", flush=True)
+        sys.stdout.flush()
 
         # 分段处理
         num_chunks = math.ceil(len(audio_segment) / self.chunk_length_ms)
-        print(f"[DualEngine] Processing {num_chunks} chunks with parallel dual engines (Chinese + English)...")
+        print(f"[DualEngine] Processing {num_chunks} chunks with parallel dual engines (Chinese + English)...", flush=True)
+        print(f"[DualEngine] Active threads at start: {threading.active_count()}", flush=True)
+        sys.stdout.flush()
 
         chinese_results = []
         english_results = []
+
+        # 获取重用的线程池
+        executor = self._get_executor()
 
         for i in range(num_chunks):
             start_ms = i * self.chunk_length_ms
             end_ms = min((i + 1) * self.chunk_length_ms, len(audio_segment))
             chunk = audio_segment[start_ms:end_ms]
 
-            print(f"  Chunk {i+1}/{num_chunks} ({start_ms/1000:.0f}s-{end_ms/1000:.0f}s) - parallel processing...")
+            print(f"  Chunk {i+1}/{num_chunks} ({start_ms/1000:.0f}s-{end_ms/1000:.0f}s) - parallel processing...", flush=True)
+            sys.stdout.flush()
 
             # 准备两个独立的 BytesIO（避免竞态条件）
             wav_io_zh = io.BytesIO()
-            chunk.export(wav_io_zh, format="wav")
-            wav_io_zh.seek(0)
-
             wav_io_en = io.BytesIO()
-            chunk.export(wav_io_en, format="wav")
-            wav_io_en.seek(0)
 
-            # 并行处理中英文（2个线程）
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            try:
+                chunk.export(wav_io_zh, format="wav")
+                wav_io_zh.seek(0)
+
+                chunk.export(wav_io_en, format="wav")
+                wav_io_en.seek(0)
+
+                # 使用重用的线程池并行处理
                 recognizer_zh = sr.Recognizer()
                 recognizer_en = sr.Recognizer()
 
@@ -131,13 +166,21 @@ class CustomAudioConverter(DocumentConverter):
                     zh_text = future_zh.result(timeout=90)
                     en_text = future_en.result(timeout=90)
                 except concurrent.futures.TimeoutError:
-                    print("    Timeout: transcription took too long")
+                    print("    Timeout: transcription took too long", flush=True)
+                    sys.stdout.flush()
                     zh_text = "[Timeout after 90s]"
                     en_text = "[Timeout after 90s]"
+                    # 注意：无法取消已运行的任务，但至少不会永远等待
                 except Exception as e:
-                    print(f"    Error in parallel processing: {e}")
+                    print(f"    Error in parallel processing: {e}", flush=True)
+                    sys.stdout.flush()
                     zh_text = f"[Error: {e}]"
                     en_text = f"[Error: {e}]"
+
+            finally:
+                # 确保 BytesIO 被关闭，释放内存
+                wav_io_zh.close()
+                wav_io_en.close()
 
             # 保存结果
             chinese_results.append({
@@ -151,11 +194,16 @@ class CustomAudioConverter(DocumentConverter):
                 'text': en_text
             })
 
+            # 显式删除 chunk，释放内存
+            del chunk
+
             # 添加延迟避免限流（除了最后一个分段）
             if i < num_chunks - 1:
                 time.sleep(0.5)
 
-        print(f"[DualEngine] All chunks processed successfully")
+        print(f"[DualEngine] All chunks processed successfully", flush=True)
+        print(f"[DualEngine] Active threads at end: {threading.active_count()}", flush=True)
+        sys.stdout.flush()
 
         # 生成双引擎结果 Markdown
         md_content = self._format_dual_results(chinese_results, english_results, duration_seconds, audio_segment)
@@ -169,17 +217,23 @@ class CustomAudioConverter(DocumentConverter):
                 audio_data = recognizer.record(source)
 
             text = recognizer.recognize_google(audio_data, language=language)
-            print(f"    {engine_name}: OK ({len(text)} chars)")
+            print(f"    {engine_name}: OK ({len(text)} chars)", flush=True)
+            sys.stdout.flush()
             return text
 
         except sr.UnknownValueError:
-            print(f"    {engine_name}: No speech")
+            print(f"    {engine_name}: No speech", flush=True)
+            sys.stdout.flush()
             return '[No speech detected]'
         except sr.RequestError as e:
-            print(f"    {engine_name}: API error - {e}")
+            print(f"    {engine_name}: API error - {e}", flush=True)
+            print(f"    Error type: {type(e).__name__}", flush=True)
+            sys.stdout.flush()
             return f'[API error: {e}]'
         except Exception as e:
-            print(f"    {engine_name}: Error - {e}")
+            print(f"    {engine_name}: Unexpected error - {e}", flush=True)
+            print(f"    Error type: {type(e).__name__}", flush=True)
+            sys.stdout.flush()
             return f'[Error: {e}]'
 
     def _format_dual_results(self, chinese_results: List[Dict], english_results: List[Dict],
@@ -224,8 +278,6 @@ class CustomAudioConverter(DocumentConverter):
             md_content += f"---\n\n"
 
         return md_content
-
-        return DocumentConverterResult(markdown=md_content.strip())
 
 
 # 示例使用
