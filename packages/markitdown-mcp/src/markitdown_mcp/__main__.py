@@ -35,19 +35,19 @@ def get_markitdown_instance():
                 if os.path.exists(ffmpeg_bin):
                     os.environ["PATH"] = ffmpeg_bin + os.pathsep + os.environ.get("PATH", "")
 
-            # Register converter with faster-whisper (small model)
-            # Using small model for best balance between accuracy and speed
+            # Register converter with faster-whisper (tiny model)
+            # Using tiny model for maximum speed
             # Automatic device detection (CUDA if available, otherwise CPU)
             # Automatic compute type selection (int8_float16 for GPU, int8 for CPU)
-            # Performance mode: speed (2-3x faster with CPU multi-core + aggressive VAD)
+            # Performance mode: speed (fastest processing)
             converter = CustomAudioConverter(
-                model_size="small",
+                model_size="tiny",
                 device="auto",
                 compute_type="auto",
                 performance_mode="speed"
             )
             _md_instance.register_converter(converter, priority=-10)
-            print("[MarkItDown MCP] CustomAudioConverter registered successfully (speed mode + optimized)")
+            print("[MarkItDown MCP] CustomAudioConverter registered successfully (tiny model + speed mode)")
         except ImportError as e:
             print(f"[MarkItDown MCP] Warning: Could not import CustomAudioConverter: {e}")
         except Exception as e:
