@@ -1,6 +1,6 @@
 """
 Custom Audio Converter for MarkItDown
-使用双引擎 Web Speech API（中文 + 英文）
+使用双引擎 Web Speech API（中文 + 英文）并行处理
 
 特性：
 - 中英文双引擎并行识别
@@ -12,6 +12,8 @@ Custom Audio Converter for MarkItDown
 import io
 import os
 import math
+import time
+import concurrent.futures
 from typing import BinaryIO, Any, List, Dict
 from datetime import datetime
 from pydub import AudioSegment
@@ -61,7 +63,7 @@ class CustomAudioConverter(DocumentConverter):
 
     def convert(self, file_stream: BinaryIO, stream_info: StreamInfo, **kwargs: Any) -> DocumentConverterResult:
         """
-        使用双引擎转换音频/视频文件为 Markdown
+        使用双引擎并行转换音频/视频文件为 Markdown
         """
         # 确定音频格式
         if stream_info.extension == ".wav" or stream_info.mimetype == "audio/x-wav":
@@ -82,9 +84,8 @@ class CustomAudioConverter(DocumentConverter):
 
         # 分段处理
         num_chunks = math.ceil(len(audio_segment) / self.chunk_length_ms)
-        print(f"[DualEngine] Processing in {num_chunks} chunks with dual engines (Chinese + English)...")
+        print(f"[DualEngine] Processing {num_chunks} chunks with parallel dual engines (Chinese + English)...")
 
-        recognizer = sr.Recognizer()
         chinese_results = []
         english_results = []
 
@@ -93,29 +94,68 @@ class CustomAudioConverter(DocumentConverter):
             end_ms = min((i + 1) * self.chunk_length_ms, len(audio_segment))
             chunk = audio_segment[start_ms:end_ms]
 
-            # 转换为 WAV
-            wav_io = io.BytesIO()
-            chunk.export(wav_io, format="wav")
+            print(f"  Chunk {i+1}/{num_chunks} ({start_ms/1000:.0f}s-{end_ms/1000:.0f}s) - parallel processing...")
 
-            print(f"  Chunk {i+1}/{num_chunks} ({start_ms/1000:.0f}s-{end_ms/1000:.0f}s)...")
+            # 准备两个独立的 BytesIO（避免竞态条件）
+            wav_io_zh = io.BytesIO()
+            chunk.export(wav_io_zh, format="wav")
+            wav_io_zh.seek(0)
 
-            # 中文引擎
-            wav_io.seek(0)
-            zh_text = self._transcribe_chunk(recognizer, wav_io, "zh-CN", "Chinese")
+            wav_io_en = io.BytesIO()
+            chunk.export(wav_io_en, format="wav")
+            wav_io_en.seek(0)
+
+            # 并行处理中英文（2个线程）
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                recognizer_zh = sr.Recognizer()
+                recognizer_en = sr.Recognizer()
+
+                # 提交并行任务
+                future_zh = executor.submit(
+                    self._transcribe_chunk,
+                    recognizer_zh,
+                    wav_io_zh,
+                    "zh-CN",
+                    "Chinese"
+                )
+                future_en = executor.submit(
+                    self._transcribe_chunk,
+                    recognizer_en,
+                    wav_io_en,
+                    "en-US",
+                    "English"
+                )
+
+                # 等待结果（90秒超时）
+                try:
+                    zh_text = future_zh.result(timeout=90)
+                    en_text = future_en.result(timeout=90)
+                except concurrent.futures.TimeoutError:
+                    print("    Timeout: transcription took too long")
+                    zh_text = "[Timeout after 90s]"
+                    en_text = "[Timeout after 90s]"
+                except Exception as e:
+                    print(f"    Error in parallel processing: {e}")
+                    zh_text = f"[Error: {e}]"
+                    en_text = f"[Error: {e}]"
+
+            # 保存结果
             chinese_results.append({
                 'start': start_ms / 1000,
                 'end': end_ms / 1000,
                 'text': zh_text
             })
-
-            # 英文引擎
-            wav_io.seek(0)
-            en_text = self._transcribe_chunk(recognizer, wav_io, "en-US", "English")
             english_results.append({
                 'start': start_ms / 1000,
                 'end': end_ms / 1000,
                 'text': en_text
             })
+
+            # 添加延迟避免限流（除了最后一个分段）
+            if i < num_chunks - 1:
+                time.sleep(0.5)
+
+        print(f"[DualEngine] All chunks processed successfully")
 
         # 生成双引擎结果 Markdown
         md_content = self._format_dual_results(chinese_results, english_results, duration_seconds, audio_segment)
